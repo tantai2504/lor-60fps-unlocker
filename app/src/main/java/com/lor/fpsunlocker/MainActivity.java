@@ -4,16 +4,22 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -54,6 +60,8 @@ public class MainActivity extends Activity {
     private final StringBuilder logHistory = new StringBuilder();
     private final List<File> discoveredFiles = new ArrayList<>();
 
+    private ScrollView scrollView;
+    private LinearLayout contentContainer;
     private TextView tvEnvBadge;
     private TextView tvStatusTitle;
     private TextView tvStatusDetail;
@@ -72,8 +80,14 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildUi();
-        appendLog("Khởi động ứng dụng (Android " + Build.VERSION.RELEASE + " / SDK " + Build.VERSION.SDK_INT + ")");
+        appendLog("LoR 60+ FPS Unlocker v1.0.3 (Android " + Build.VERSION.RELEASE + " / SDK " + Build.VERSION.SDK_INT + ")");
         appendLog("dataDir: " + getApplicationInfo().dataDir);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        updateResponsiveContainerWidth();
     }
 
     @Override
@@ -89,29 +103,64 @@ public class MainActivity extends Activity {
     }
 
     private void buildUi() {
-        ScrollView scrollView = new ScrollView(this);
+        scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(COLOR_BG);
         scrollView.setFillViewport(true);
+        scrollView.setClipToPadding(false);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(18);
-        root.setPadding(pad, dp(22), pad, dp(28));
-        scrollView.addView(root, new ViewGroup.LayoutParams(
+        // Outer wrapper centers the content cleanly on tablets, foldables, and landscape screens
+        FrameLayout outerFrame = new FrameLayout(this);
+        scrollView.addView(outerFrame, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        contentContainer = new LinearLayout(this);
+        contentContainer.setOrientation(LinearLayout.VERTICAL);
+        int baseSidePad = getResponsiveSidePaddingPx();
+        contentContainer.setPadding(baseSidePad, dp(20), baseSidePad, dp(28));
+
+        FrameLayout.LayoutParams containerParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        containerParams.gravity = Gravity.CENTER_HORIZONTAL;
+        outerFrame.addView(contentContainer, containerParams);
+
+        // Apply system bar & display cutout insets (handles notches & gesture bars on Android 10-17)
+        scrollView.setOnApplyWindowInsetsListener((v, insets) -> {
+            int topInset;
+            int bottomInset;
+            int leftInset;
+            int rightInset;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                topInset = bars.top;
+                bottomInset = bars.bottom;
+                leftInset = bars.left;
+                rightInset = bars.right;
+            } else {
+                topInset = insets.getSystemWindowInsetTop();
+                bottomInset = insets.getSystemWindowInsetBottom();
+                leftInset = insets.getSystemWindowInsetLeft();
+                rightInset = insets.getSystemWindowInsetRight();
+            }
+            v.setPadding(leftInset, topInset, rightInset, bottomInset);
+            return insets;
+        });
+
+        LinearLayout root = contentContainer;
+        updateResponsiveContainerWidth();
 
         // Header
         TextView tvTitle = new TextView(this);
         tvTitle.setText("LoR 60+ FPS Unlocker");
         tvTitle.setTextColor(COLOR_GOLD);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(tvTitle);
 
         TextView tvSubtitle = new TextView(this);
-        tvSubtitle.setText("Mở khóa 60 / 90 / 120 FPS cho Legends of Runeterra (Không cần Root • Dùng trong Meta Wolf)");
+        tvSubtitle.setText("v1.0.3 • Mở khóa 60 / 90 / 120 FPS cho LoR (Không Root • Dùng trong Meta Wolf)");
         tvSubtitle.setTextColor(COLOR_TEXT_SECONDARY);
-        tvSubtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        tvSubtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         tvSubtitle.setPadding(0, dp(4), 0, dp(14));
         root.addView(tvSubtitle);
 
@@ -169,13 +218,13 @@ public class MainActivity extends Activity {
 
         btnRefresh = createSmallButton("Quét lại", COLOR_BTN_MUTED);
         btnRefresh.setOnClickListener(v -> refreshScan());
-        LinearLayout.LayoutParams leftBtn = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams leftBtn = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         leftBtn.rightMargin = dp(6);
         utilRow.addView(btnRefresh, leftBtn);
 
         btnCopyLog = createSmallButton("Copy Log hỗ trợ", COLOR_BTN_MUTED);
         btnCopyLog.setOnClickListener(v -> copyLogToClipboard());
-        LinearLayout.LayoutParams rightBtn = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams rightBtn = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         rightBtn.leftMargin = dp(6);
         utilRow.addView(btnCopyLog, rightBtn);
 
@@ -198,6 +247,14 @@ public class MainActivity extends Activity {
         etCustomPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         etCustomPath.setTypeface(Typeface.MONOSPACE);
         etCustomPath.setSingleLine(true);
+        etCustomPath.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        etCustomPath.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                refreshScan();
+                return true;
+            }
+            return false;
+        });
         etCustomPath.setBackground(createRoundedRect(COLOR_LOG_BG, COLOR_CARD_BORDER, dp(8)));
         etCustomPath.setPadding(dp(10), dp(10), dp(10), dp(10));
         LinearLayout.LayoutParams etParams = new LinearLayout.LayoutParams(
@@ -208,7 +265,7 @@ public class MainActivity extends Activity {
         btnScanCustom = createSmallButton("Quét đường dẫn này", COLOR_BTN_MUTED);
         btnScanCustom.setOnClickListener(v -> refreshScan());
         customPathCard.addView(btnScanCustom, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         root.addView(customPathCard, cardMarginParams(dp(14)));
 
@@ -433,13 +490,14 @@ public class MainActivity extends Activity {
         Button btn = new Button(this);
         btn.setText(text);
         btn.setAllCaps(false);
+        btn.setSingleLine(false);
         btn.setTextColor(textColor);
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f);
         btn.setTypeface(Typeface.DEFAULT_BOLD);
         btn.setBackground(createRoundedRect(bgColor, bgColor, dp(10)));
         btn.setGravity(Gravity.CENTER);
-        btn.setMinimumHeight(dp(50));
-        btn.setPadding(dp(16), dp(12), dp(16), dp(12));
+        btn.setMinHeight(dp(50));
+        btn.setPadding(dp(14), dp(12), dp(14), dp(12));
         return btn;
     }
 
@@ -447,11 +505,42 @@ public class MainActivity extends Activity {
         Button btn = new Button(this);
         btn.setText(text);
         btn.setAllCaps(false);
+        btn.setSingleLine(false);
         btn.setTextColor(COLOR_TEXT_PRIMARY);
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         btn.setBackground(createRoundedRect(bgColor, COLOR_CARD_BORDER, dp(8)));
         btn.setGravity(Gravity.CENTER);
+        btn.setMinHeight(dp(42));
+        btn.setPadding(dp(10), dp(8), dp(10), dp(8));
         return btn;
+    }
+
+    private void updateResponsiveContainerWidth() {
+        if (contentContainer == null) {
+            return;
+        }
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int maxContentWidthPx = dp(560);
+        int targetWidth = dm.widthPixels > maxContentWidthPx
+                ? maxContentWidthPx
+                : ViewGroup.LayoutParams.MATCH_PARENT;
+
+        ViewGroup.LayoutParams lp = contentContainer.getLayoutParams();
+        if (lp != null) {
+            lp.width = targetWidth;
+            contentContainer.setLayoutParams(lp);
+        }
+        int sidePad = getResponsiveSidePaddingPx();
+        contentContainer.setPadding(sidePad, dp(20), sidePad, dp(28));
+    }
+
+    private int getResponsiveSidePaddingPx() {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        float widthDp = dm.widthPixels / Math.max(dm.density, 1f);
+        if (widthDp < 360f) {
+            return dp(12);
+        }
+        return dp(18);
     }
 
     private GradientDrawable createRoundedRect(int fillColor, int strokeColor, int radiusPx) {
