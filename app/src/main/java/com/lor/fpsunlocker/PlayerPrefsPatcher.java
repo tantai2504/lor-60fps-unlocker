@@ -235,11 +235,21 @@ public final class PlayerPrefsPatcher {
                 return patchResult;
             }
 
-            // Create a one-time .bak backup of the untouched file before modifying
-            File backupFile = new File(file.getParentFile(), file.getName() + ".bak");
-            if (!backupFile.exists()) {
+            // CRITICAL: Never create a "<file>.bak" in shared_prefs!
+            // Android's SharedPreferencesImpl.loadFromDisk() treats "<file>.bak" as a crash-recovery
+            // backup and will DELETE our patched XML and restore the ".bak" file on next app launch!
+            File androidRecoveryBak = new File(file.getParentFile(), file.getName() + ".bak");
+            if (androidRecoveryBak.exists()) {
+                // Remove any stale .bak so SharedPreferencesImpl won't overwrite our edit
+                //noinspection ResultOfMethodCallIgnored
+                androidRecoveryBak.delete();
+            }
+
+            // Create a safe one-time backup with a non-".bak" extension
+            File safeBackupFile = new File(file.getParentFile(), file.getName() + ".orig_backup");
+            if (!safeBackupFile.exists()) {
                 try {
-                    writeFileUtf8(backupFile, originalXml);
+                    writeFileUtf8(safeBackupFile, originalXml);
                 } catch (IOException ignored) {
                     // Non-fatal if backup creation fails
                 }

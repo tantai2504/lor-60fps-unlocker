@@ -74,18 +74,24 @@ public class PlayerPrefsPatcherTest {
     }
 
     @Test
-    public void applyToFileCreatesBackupAndPersistsChange() throws Exception {
+    public void applyToFileCreatesSafeBackupAndRemovesAndroidBak() throws Exception {
         File tempDir = Files.createTempDirectory("lor-test").toFile();
-        File prefsFile = new File(tempDir, "com.riotgames.legendsofruneterra.v2.playerprefs.xml");
+        File prefsFile = new File(tempDir, "com.riotgames.legendsofruneterravn.v2.playerprefs.xml");
         PlayerPrefsPatcher.writeFileUtf8(prefsFile, SAMPLE_XML_WITHOUT_FPS);
+
+        // Simulate a stale Android SharedPreferences .bak file
+        File staleBak = new File(tempDir, prefsFile.getName() + ".bak");
+        PlayerPrefsPatcher.writeFileUtf8(staleBak, SAMPLE_XML_WITHOUT_FPS);
 
         PlayerPrefsPatcher.PatchResult res =
                 PlayerPrefsPatcher.applyToFile(prefsFile, PlayerPrefsPatcher.FpsMode.FPS_60_PLUS);
 
         assertTrue(res.success);
-        File backup = new File(tempDir, prefsFile.getName() + ".bak");
-        assertTrue(backup.exists());
-        assertEquals(SAMPLE_XML_WITHOUT_FPS, PlayerPrefsPatcher.readFileUtf8(backup));
+        // Must NOT leave a .bak file (Android SharedPreferencesImpl would roll back our edit!)
+        assertFalse(staleBak.exists());
+        File safeBackup = new File(tempDir, prefsFile.getName() + ".orig_backup");
+        assertTrue(safeBackup.exists());
+        assertEquals(SAMPLE_XML_WITHOUT_FPS, PlayerPrefsPatcher.readFileUtf8(safeBackup));
         assertTrue(PlayerPrefsPatcher.readFileUtf8(prefsFile).contains("fps_60_plus"));
     }
 }

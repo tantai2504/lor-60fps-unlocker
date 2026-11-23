@@ -17,7 +17,13 @@ import java.util.Set;
 public final class LorConfigLocator {
 
     public static final String LOR_PACKAGE = "com.riotgames.legendsofruneterra";
+    public static final String LOR_PACKAGE_VN = "com.riotgames.legendsofruneterravn";
     public static final String META_WOLF_PACKAGE = "top.bienvenido.saas.i18n";
+
+    private static final String[] KNOWN_LOR_PACKAGES = {
+            LOR_PACKAGE,
+            LOR_PACKAGE_VN
+    };
 
     private static final String[] KNOWN_CONTAINERS = {
             "app_data_anon",
@@ -27,7 +33,9 @@ public final class LorConfigLocator {
 
     private static final String[] KNOWN_PREFS_FILENAMES = {
             "com.riotgames.legendsofruneterra.v2.playerprefs.xml",
-            "com.riotgames.legendsofruneterra.v2.playerprefs"
+            "com.riotgames.legendsofruneterra.v2.playerprefs",
+            "com.riotgames.legendsofruneterravn.v2.playerprefs.xml",
+            "com.riotgames.legendsofruneterravn.v2.playerprefs"
     };
 
     // Skip heavy/irrelevant folders during recursive scan so scanning stays instant (<50ms)
@@ -141,12 +149,16 @@ public final class LorConfigLocator {
             }
             searchedRootPaths.add(absRoot);
 
-            inspectLorPackageDir(new File(root, LOR_PACKAGE), seenFileKeys, foundFiles);
+            for (String pkg : KNOWN_LOR_PACKAGES) {
+                inspectLorPackageDir(new File(root, pkg), seenFileKeys, foundFiles);
+            }
 
             for (String containerName : KNOWN_CONTAINERS) {
                 File containerDir = new File(root, containerName);
                 if (containerDir.isDirectory() && containerDir.canRead()) {
-                    inspectLorPackageDir(new File(containerDir, LOR_PACKAGE), seenFileKeys, foundFiles);
+                    for (String pkg : KNOWN_LOR_PACKAGES) {
+                        inspectLorPackageDir(new File(containerDir, pkg), seenFileKeys, foundFiles);
+                    }
                 }
             }
 
@@ -287,7 +299,8 @@ public final class LorConfigLocator {
 
     private static boolean isLorPlayerPrefsFile(File file) {
         String lower = file.getName().toLowerCase(Locale.ROOT);
-        if (lower.endsWith(".bak") || !lower.contains("playerprefs")) {
+        if (lower.endsWith(".bak") || lower.endsWith(".bak2") || lower.endsWith(".orig_backup")
+                || !lower.contains("playerprefs")) {
             return false;
         }
         String fullLower = file.getAbsolutePath().toLowerCase(Locale.ROOT);
