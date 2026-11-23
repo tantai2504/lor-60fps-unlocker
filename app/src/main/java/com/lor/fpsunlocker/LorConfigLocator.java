@@ -3,6 +3,8 @@ package com.lor.fpsunlocker;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -27,6 +29,16 @@ public final class LorConfigLocator {
             "com.riotgames.legendsofruneterra.v2.playerprefs.xml",
             "com.riotgames.legendsofruneterra.v2.playerprefs"
     };
+
+    // Skip heavy/irrelevant folders during recursive scan so scanning stays instant (<50ms)
+    private static final Set<String> SKIP_DIR_NAMES = new HashSet<>(Arrays.asList(
+            "cache", "code_cache", "lib", "oat", "dex", "dalvik-cache",
+            "no_backup", "databases", "app_webview", "app_textures",
+            "Unity", "il2cpp", "AssetBundles", "assets", "res", "obb"
+    ));
+
+    private static final int MAX_RECURSIVE_DEPTH = 6;
+    private static final int MAX_VISITED_DIRS = 800;
 
     public static final class ScanResult {
         public final boolean insideCloner;
@@ -71,15 +83,44 @@ public final class LorConfigLocator {
     }
 
     /**
-     * Scans Meta Wolf / cloner directories to find all accessible LoR playerprefs files.
+     * Scans Meta Wolf / cloner directories (plus an optional custom user-provided path)
+     * to find all accessible LoR playerprefs files.
      */
     public static ScanResult scan(String appDataDir) {
+        return scan(appDataDir, null);
+    }
+
+    public static ScanResult scan(String appDataDir, String customPath) {
         boolean insideCloner = isRunningInsideCloner(appDataDir);
         Set<File> rootsToSearch = new LinkedHashSet<>();
         List<String> searchedRootPaths = new ArrayList<>();
         List<String> notes = new ArrayList<>();
+        Set<String> seenFileKeys = new LinkedHashSet<>();
+        List<File> foundFiles = new ArrayList<>();
 
-        // 1. Dynamically walk up ancestors of our own dataDir (supports Meta Wolf & other cloners)
+        // 0. If user specified a custom file or folder path, check it first!
+        if (customPath != null && !customPath.trim().isEmpty()) {
+            String trimmed = customPath.trim();
+            File customTarget = new File(trimmed);
+            if (customTarget.isFile()) {
+                addFoundFile(customTarget, seenFileKeys, foundFiles);
+                searchedRootPaths.add(trimmed);
+                if (foundFiles.isEmpty()) {
+                    notes.add("File nhập thủ công không đọc được: " + trimmed);
+                }
+            } else if (customTarget.isDirectory()) {
+                rootsToSearch.add(customTarget);
+            } else {
+                notes.add("Đường dẫn nhập thủ công không tồn tại hoặc không có quyền đọc: " + trimmed);
+            }
+        }
+
+        // 1. Explicit known Meta Wolf base directories (scan BOTH /data/data and /data/user/0
+        //    because virtualized IO hooks can treat them differently)
+        addIfReadableDir(rootsToSearch, new File("/data/data/" + META_WOLF_PACKAGE));
+        addIfReadableDir(rootsToSearch, new File("/data/user/0/" + META_WOLF_PACKAGE));
+
+        // 2. Dynamically walk up ancestors of our own dataDir (supports Meta Wolf & other cloners)
         if (appDataDir != null && !appDataDir.trim().isEmpty()) {
             File current = new File(appDataDir);
             for (int depth = 0; depth < 5 && current != null; depth++) {
@@ -91,106 +132,172 @@ public final class LorConfigLocator {
             }
         }
 
-        // 2. Explicit known Meta Wolf base directories
-        addIfReadableDir(rootsToSearch, new File("/data/data/" + META_WOLF_PACKAGE));
-        addIfReadableDir(rootsToSearch, new File("/data/user/0/" + META_WOLF_PACKAGE));
-
-        Set<String> seenCanonicalPaths = new LinkedHashSet<>();
-        List<File> foundFiles = new ArrayList<>();
-
+        // Phase A: Fast targeted lookup on known container layouts
+        Set<String> seenRootAbsPaths = new LinkedHashSet<>();
         for (File root : rootsToSearch) {
-            String canonicalRoot = safeCanonicalPath(root);
-            if (searchedRootPaths.contains(canonicalRoot)) {
+            String absRoot = root.getAbsolutePath();
+            if (!seenRootAbsPaths.add(absRoot)) {
                 continue;
             }
-            searchedRootPaths.add(canonicalRoot);
+            searchedRootPaths.add(absRoot);
 
-            // Check if LoR package directory exists directly inside this root
-            inspectLorPackageDir(new File(root, LOR_PACKAGE), seenCanonicalPaths, foundFiles);
+            inspectLorPackageDir(new File(root, LOR_PACKAGE), seenFileKeys, foundFiles);
 
-            // Check known Meta Wolf container subdirectories
             for (String containerName : KNOWN_CONTAINERS) {
                 File containerDir = new File(root, containerName);
                 if (containerDir.isDirectory() && containerDir.canRead()) {
-                    inspectLorPackageDir(new File(containerDir, LOR_PACKAGE), seenCanonicalPaths, foundFiles);
+                    inspectLorPackageDir(new File(containerDir, LOR_PACKAGE), seenFileKeys, foundFiles);
                 }
             }
 
-            // Dynamically check any other app_* container subdirectories (future-proofing)
-            File[] children = root.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    if (child.isDirectory() && child.getName().startsWith("app_") && child.canRead()) {
-                        inspectLorPackageDir(new File(child, LOR_PACKAGE), seenCanonicalPaths, foundFiles);
-                    }
-                }
+            // Also check direct shared_prefs if user pasted .../0 or .../shared_prefs
+            inspectSharedPrefsDir(root, seenFileKeys, foundFiles);
+            inspectSharedPrefsDir(new File(root, "shared_prefs"), seenFileKeys, foundFiles);
+        }
+
+        // Phase B: Bounded recursive scan if targeted lookup didn't find anything
+        if (foundFiles.isEmpty()) {
+            int[] visitedCounter = new int[]{0};
+            Set<String> visitedDirs = new HashSet<>();
+            for (File root : rootsToSearch) {
+                recursiveSearch(root, 0, visitedCounter, visitedDirs, seenFileKeys, foundFiles);
             }
         }
 
+        // Diagnostics when nothing is found (helps troubleshoot different Meta Wolf builds)
         if (foundFiles.isEmpty()) {
             if (!insideCloner) {
                 notes.add("Ứng dụng đang chạy bên ngoài Meta Wolf nên không thể truy cập thư mục dữ liệu của LoR.");
             } else {
-                notes.add("Đang ở trong Meta Wolf nhưng chưa thấy file playerprefs của LoR. Hãy mở LoR trong Meta Wolf, đăng nhập và tải xong dữ liệu, sau đó tắt hẳn LoR rồi quét lại.");
+                notes.add("Chưa thấy file playerprefs của LoR trong Meta Wolf. Hãy kiểm tra: bạn đã Import LoR vào Meta Wolf, mở LoR đăng nhập vào sảnh chính, rồi Kill LoR chưa?");
+                collectDirectoryDiagnostics(rootsToSearch, notes);
             }
         }
 
         return new ScanResult(insideCloner, foundFiles, searchedRootPaths, notes);
     }
 
-    private static void inspectLorPackageDir(File lorDir, Set<String> seenCanonicalPaths, List<File> foundFiles) {
+    private static void recursiveSearch(File dir,
+                                        int depth,
+                                        int[] visitedCounter,
+                                        Set<String> visitedDirs,
+                                        Set<String> seenFileKeys,
+                                        List<File> foundFiles) {
+        if (dir == null || depth > MAX_RECURSIVE_DEPTH || visitedCounter[0] >= MAX_VISITED_DIRS) {
+            return;
+        }
+        if (!dir.isDirectory() || !dir.canRead()) {
+            return;
+        }
+        String canonical = safeCanonicalPath(dir);
+        if (!visitedDirs.add(canonical)) {
+            return;
+        }
+        visitedCounter[0]++;
+
+        File[] entries = dir.listFiles();
+        if (entries == null) {
+            return;
+        }
+
+        for (File entry : entries) {
+            String name = entry.getName();
+            if (entry.isFile()) {
+                if (isLorPlayerPrefsFile(entry)) {
+                    addFoundFile(entry, seenFileKeys, foundFiles);
+                }
+            } else if (entry.isDirectory()) {
+                if (SKIP_DIR_NAMES.contains(name) || name.startsWith(".")) {
+                    continue;
+                }
+                // Skip our own app's directory to avoid noise
+                if (name.equals("com.lor.fpsunlocker")) {
+                    continue;
+                }
+                recursiveSearch(entry, depth + 1, visitedCounter, visitedDirs, seenFileKeys, foundFiles);
+            }
+        }
+    }
+
+    private static void collectDirectoryDiagnostics(Set<File> rootsToSearch, List<String> notes) {
+        for (File root : rootsToSearch) {
+            String name = root.getName();
+            if (name.equals(META_WOLF_PACKAGE) || name.equals("app_split")
+                    || name.equals("app_data_anon") || name.equals("app_fozak_apks")) {
+                File[] children = root.listFiles();
+                if (children == null) {
+                    notes.add("Thư mục " + root.getAbsolutePath() + " -> listFiles() = null (không có quyền liệt kê)");
+                } else {
+                    StringBuilder sb = new StringBuilder();
+                    int limit = Math.min(children.length, 20);
+                    for (int i = 0; i < limit; i++) {
+                        if (i > 0) sb.append(", ");
+                        sb.append(children[i].getName());
+                    }
+                    if (children.length > limit) {
+                        sb.append(", ... (+").append(children.length - limit).append(")");
+                    }
+                    notes.add("Bên trong " + root.getAbsolutePath() + " (" + children.length + " mục): [" + sb + "]");
+                }
+            }
+        }
+    }
+
+    private static void inspectLorPackageDir(File lorDir, Set<String> seenFileKeys, List<File> foundFiles) {
         if (!lorDir.isDirectory() || !lorDir.canRead()) {
             return;
         }
 
-        // Direct shared_prefs inside package dir (some cloners omit /0/)
-        inspectSharedPrefsDir(new File(lorDir, "shared_prefs"), seenCanonicalPaths, foundFiles);
+        inspectSharedPrefsDir(new File(lorDir, "shared_prefs"), seenFileKeys, foundFiles);
 
-        // Clone slot subdirectories like 0, 1, 2...
         File slot0 = new File(lorDir, "0");
         if (slot0.isDirectory()) {
-            inspectSharedPrefsDir(new File(slot0, "shared_prefs"), seenCanonicalPaths, foundFiles);
+            inspectSharedPrefsDir(new File(slot0, "shared_prefs"), seenFileKeys, foundFiles);
         }
 
         File[] subdirs = lorDir.listFiles();
         if (subdirs != null) {
             for (File sub : subdirs) {
                 if (sub.isDirectory() && isNumeric(sub.getName())) {
-                    inspectSharedPrefsDir(new File(sub, "shared_prefs"), seenCanonicalPaths, foundFiles);
+                    inspectSharedPrefsDir(new File(sub, "shared_prefs"), seenFileKeys, foundFiles);
                 }
             }
         }
     }
 
-    private static void inspectSharedPrefsDir(File sharedPrefsDir, Set<String> seenCanonicalPaths, List<File> foundFiles) {
+    private static void inspectSharedPrefsDir(File sharedPrefsDir, Set<String> seenFileKeys, List<File> foundFiles) {
         if (!sharedPrefsDir.isDirectory() || !sharedPrefsDir.canRead()) {
             return;
         }
 
-        // Check known exact filenames first
         for (String name : KNOWN_PREFS_FILENAMES) {
             File candidate = new File(sharedPrefsDir, name);
-            addFoundFile(candidate, seenCanonicalPaths, foundFiles);
+            addFoundFile(candidate, seenFileKeys, foundFiles);
         }
 
-        // Fallback: scan for any playerprefs file (excluding .bak backups)
         File[] files = sharedPrefsDir.listFiles();
         if (files != null) {
             for (File f : files) {
-                if (f.isFile()) {
-                    String lower = f.getName().toLowerCase(Locale.ROOT);
-                    if (lower.contains("playerprefs") && !lower.endsWith(".bak")) {
-                        addFoundFile(f, seenCanonicalPaths, foundFiles);
-                    }
+                if (f.isFile() && isLorPlayerPrefsFile(f)) {
+                    addFoundFile(f, seenFileKeys, foundFiles);
                 }
             }
         }
     }
 
-    private static void addFoundFile(File candidate, Set<String> seenCanonicalPaths, List<File> foundFiles) {
+    private static boolean isLorPlayerPrefsFile(File file) {
+        String lower = file.getName().toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".bak") || !lower.contains("playerprefs")) {
+            return false;
+        }
+        String fullLower = file.getAbsolutePath().toLowerCase(Locale.ROOT);
+        return lower.contains("legendsofruneterra") || fullLower.contains("legendsofruneterra");
+    }
+
+    private static void addFoundFile(File candidate, Set<String> seenFileKeys, List<File> foundFiles) {
         if (candidate.isFile() && candidate.canRead()) {
             String canonical = safeCanonicalPath(candidate);
-            if (seenCanonicalPaths.add(canonical)) {
+            if (seenFileKeys.add(canonical)) {
                 foundFiles.add(candidate);
             }
         }

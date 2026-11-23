@@ -11,9 +11,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -58,6 +58,8 @@ public class MainActivity extends Activity {
     private TextView tvStatusTitle;
     private TextView tvStatusDetail;
     private TextView tvLog;
+    private EditText etCustomPath;
+    private Button btnScanCustom;
     private Button btn60Plus;
     private Button btn60;
     private Button btnReset;
@@ -177,7 +179,38 @@ public class MainActivity extends Activity {
         rightBtn.leftMargin = dp(6);
         utilRow.addView(btnCopyLog, rightBtn);
 
-        root.addView(utilRow, cardMarginParams(dp(16)));
+        root.addView(utilRow, cardMarginParams(dp(14)));
+
+        // Optional Manual Path Card (in case auto-scan misses custom cloner paths)
+        LinearLayout customPathCard = createCard(COLOR_CARD, COLOR_CARD_BORDER);
+        TextView tvCustomLabel = new TextView(this);
+        tvCustomLabel.setText("Đường dẫn thủ công (chỉ cần dùng nếu tự quét không thấy)");
+        tvCustomLabel.setTextColor(COLOR_TEXT_PRIMARY);
+        tvCustomLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        tvCustomLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCustomLabel.setPadding(0, 0, 0, dp(6));
+        customPathCard.addView(tvCustomLabel);
+
+        etCustomPath = new EditText(this);
+        etCustomPath.setHint("/data/data/top.bienvenido.saas.i18n/");
+        etCustomPath.setHintTextColor(COLOR_TEXT_SECONDARY);
+        etCustomPath.setTextColor(COLOR_TEXT_PRIMARY);
+        etCustomPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        etCustomPath.setTypeface(Typeface.MONOSPACE);
+        etCustomPath.setSingleLine(true);
+        etCustomPath.setBackground(createRoundedRect(COLOR_LOG_BG, COLOR_CARD_BORDER, dp(8)));
+        etCustomPath.setPadding(dp(10), dp(10), dp(10), dp(10));
+        LinearLayout.LayoutParams etParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        etParams.bottomMargin = dp(8);
+        customPathCard.addView(etCustomPath, etParams);
+
+        btnScanCustom = createSmallButton("Quét đường dẫn này", COLOR_BTN_MUTED);
+        btnScanCustom.setOnClickListener(v -> refreshScan());
+        customPathCard.addView(btnScanCustom, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+
+        root.addView(customPathCard, cardMarginParams(dp(14)));
 
         // Quick Guide Card
         LinearLayout guideCard = createCard(COLOR_CARD, COLOR_CARD_BORDER);
@@ -230,9 +263,10 @@ public class MainActivity extends Activity {
         }
         setBusy(true);
         final String dataDir = getApplicationInfo().dataDir;
+        final String customPath = etCustomPath != null ? etCustomPath.getText().toString().trim() : "";
 
         executor.execute(() -> {
-            LorConfigLocator.ScanResult scan = LorConfigLocator.scan(dataDir);
+            LorConfigLocator.ScanResult scan = LorConfigLocator.scan(dataDir, customPath);
             List<String> fileSummaries = new ArrayList<>();
             String firstStateSummary = null;
 
@@ -277,6 +311,9 @@ public class MainActivity extends Activity {
                     }
                     tvStatusDetail.setText(detail.toString().trim());
                     appendLog("Quét xong: không tìm thấy file playerprefs (đã kiểm tra " + scan.searchedRoots.size() + " thư mục gốc).");
+                    for (String note : scan.diagnosticNotes) {
+                        appendLog("  -> " + note);
+                    }
                 } else {
                     tvStatusTitle.setText("Đã sẵn sàng (" + scan.configFiles.size() + " file) • " + finalState);
                     StringBuilder detail = new StringBuilder();
@@ -351,6 +388,9 @@ public class MainActivity extends Activity {
         btn60.setEnabled(canPatch);
         btnReset.setEnabled(canPatch);
         btnRefresh.setEnabled(!busy);
+        if (btnScanCustom != null) {
+            btnScanCustom.setEnabled(!busy);
+        }
 
         btn60Plus.setAlpha(canPatch ? 1f : 0.45f);
         btn60.setAlpha(canPatch ? 1f : 0.45f);
